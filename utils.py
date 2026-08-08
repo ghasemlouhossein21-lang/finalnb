@@ -18,6 +18,25 @@ import database as db
 
 logger = logging.getLogger(__name__)
 
+# حداکثر طول متن پیام معمولی تلگرام (send_message)؛ اگر متنی از این بیشتر باشد، تلگرام
+# خطای «Bad Request: MESSAGE_TOO_LONG» برمی‌گرداند.
+TELEGRAM_TEXT_LIMIT = 4096
+
+
+def truncate_for_telegram(text: str, limit: int = TELEGRAM_TEXT_LIMIT) -> str:
+    """اگر متن از سقف مجاز طول پیام تلگرام بیشتر باشد، آن را کوتاه می‌کند و یک یادداشت کوتاه به انتهایش اضافه می‌کند؛ در غیر این‌صورت متن بدون تغییر برمی‌گردد. هر جایی که احتمال ارسال یک متن طولانی/قابل‌ویرایش (مثلاً پیام خوش‌آمدگویی یا هر متن دیگری که ادمین از پنل ویرایش کرده) وجود دارد، باید قبل از ارسال از این تابع استفاده کند (نه فقط در show_menu_with_sticker)."""
+    if text is None:
+        return text
+    if len(text) <= limit:
+        return text
+    suffix = "\n\n… (متن به‌دلیل محدودیت طول پیام تلگرام کوتاه شد)"
+    return text[: limit - len(suffix)] + suffix
+
+
+def is_message_too_long_error(exc: Exception) -> bool:
+    """تشخیص می‌دهد که آیا یک TelegramBadRequest دقیقاً از نوع «MESSAGE_TOO_LONG» است (و مثلاً یک خطای مربوط به parse mode نیست)؛ تا همه‌جا یکسان تشخیص داده شود."""
+    return "message is too long" in str(exc).lower()
+
 
 def get_main_keyboard(user_id):
     """منوی دائمی پایین صفحه را برمی‌گرداند — مگر اینکه برای این کاربر
@@ -250,7 +269,7 @@ STICKER_SECTION_LABELS = {
     "notif_personal_message": "✉️ پیام شخصی ادمین به کاربر",
     "notif_broadcast": "📢 پیام همگانی",
     "notif_expiry": "⏰ هشدار پایان سرویس",
-    "notif_usage_80": "🔔 هشدار ��صرف ۸۰٪ حجم",
+    "notif_usage_80": "🔔 هشدار مصرف ۸۰٪ حجم",
     "notif_usage_90": "🔥 هشدار اتمام حجم (۹۰٪)",
     "notif_wallet_charge": "💳 شارژ کیف پول توسط ادمین",
     "notif_service_delivery": "📦 ارسال سرویس توسط ادمین",
@@ -392,10 +411,21 @@ async def show_menu_with_sticker(
 
     try:
         menu_msg = await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode=parse_mode)
-    except TelegramBadRequest:
-        # 🆕 فیکس: اگر متن (مثلاً متن سفارشی ویرایش کارت که ادمین از پنل ویرایش کرده) شامل کاراکترهای خاص HTML/Markdown نامعتبر (مثلاً < یا > تکی بدون بسته شدن) باشد و تلگرام نتواند پارسش کند، تلاش برای ارسال مجدد نمی‌شود و کاربر اصلاً منوی را دریافت نمی‌کرد، پس به‌جای شکست کامل، همان متن بدون هیچ قالب‌بندی (parse_mode=None) دوباره فرستاده می‌شود (مونواسپیس و سایر تگ‌ها/ستاره‌ها اینجا به‌صورت متن خام نمایش داده می‌شوند).
-        logger.exception("خطا در ارسال پیام منو با parse_mode='%s'، دوباره بدون فرمت ارسال می‌شود", parse_mode)
-        menu_msg = await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode=None)
+    except TelegramBadRequest as e:
+        # 🆕 فیکس: اگر متنی که ادمین از پنل ویرایش کرده (مثلاً پیام خوش‌آمدگویی /start یا هر متن قابل‌ویرایش دیگری) از سقف مجاز تلگرام برای متن پیام (۴۰۹۶ کاراکتر) بلندتر باشد، تلگرام خطای «Bad Request: MESSAGE_TOO_LONG» برمی‌گرداند و قبلاً هیچ‌وقت دوباره تلاشی نمی‌شد (چون فقط حالت parse_mode دست‌کاری می‌شد)؛ برای کاربرانی که تازه روی /start می‌زدند (بیشتر از همه کاربران جدید) کل منوی /start با ارور مواجه می‌شد. حالا اگر خطا دقیقاً همین باشد، متن کوتاه شده دوباره فرستاده می‌شود تا کاربر هیچ‌وقت با خطا مواجه نشود.
+        if is_message_too_long_error(e):
+            logger.error(
+                "متن منو (پیش‌نمایش %d کاراکتر) از سقف تلگرام (۴۰۹۶) بیشتر بود؛ کوتاه شد و دوباره فرستاده شد.", len(text),
+            )
+            safe_text = truncate_for_telegram(text)
+            try:
+                menu_msg = await bot.send_message(chat_id=chat_id, text=safe_text, reply_markup=reply_markup, parse_mode=parse_mode)
+            except TelegramBadRequest:
+                menu_msg = await bot.send_message(chat_id=chat_id, text=safe_text, reply_markup=reply_markup, parse_mode=None)
+        else:
+            # 🆕 فیکس: اگر متن (مثلاً متن سفارشی ویرایش کارت که ادمین از پنل ویرایش کرده) شامل کاراکترهای خاص HTML/Markdown نامعتبر (مثلاً < یا > تکی بدون بسته شدن) باشد و تلگرام نتواند پارسش کند، تلاش برای ارسال مجدد نمی‌شود و کاربر اصلاً منوی را دریافت نمی‌کرد، پس به‌جای شکست کامل، همان متن بدون هیچ قالب‌بندی (parse_mode=None) دوباره فرستاده می‌شود (مونواسپیس و سایر تگ‌ها/ستاره‌ها اینجا به‌صورت متن خام نمایش داده می‌شوند).
+            logger.exception("خطا در ارسال پیام منو با parse_mode='%s'، دوباره بدون فرمت ارسال می‌شود", parse_mode)
+            menu_msg = await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode=None)
     _last_sticker_menu[chat_id] = {"sticker_msg_id": new_sticker_msg_id, "menu_msg_id": menu_msg.message_id}
     return menu_msg
 
