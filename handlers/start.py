@@ -12,10 +12,11 @@ from aiogram import Router, F, types
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.enums import ChatMemberStatus
+from aiogram.exceptions import TelegramBadRequest
 
 import database as db
 from text_catalog import text as t
-from utils import show_menu_with_sticker, get_main_keyboard
+from utils import show_menu_with_sticker, get_main_keyboard, truncate_for_telegram, is_message_too_long_error
 from keyboards import (
     join_channels_keyboard,
     main_reply_keyboard,
@@ -192,7 +193,16 @@ async def check_join(callback: types.CallbackQuery, state: FSMContext):
         await callback.message.edit_text("👨‍💻 به پنل مدیریت خوش آمدید! همه‌ی امکانات مدیریتی از منوی پایین صفحه قابل دسترسی است ✅")
         await callback.message.answer("منوی مدیریتی فعال شد:", reply_markup=_admin_reply_kb_for(callback.from_user.id))
     else:
-        await callback.message.edit_text(_welcome_text(callback.from_user.first_name))
+        # 🆕 فیکس: این مسیر (تأیید عضویت پس از عضو کانال‌ها) مستقیماً با edit_text فرستاده می‌شد و از محافظتی که در show_menu_with_sticker اضافه شده بود عبور نمی‌کرد، پس اگر متن خوش‌آمدگویی (welcome_text) توسط ادمین طولانی ذخیره می‌شد، همینجا هم تلگرام خطای «MESSAGE_TOO_LONG» برمی‌گرداند و کاربر بعد از تأیید عضویت هم با ارور مواجه می‌شد (دقیقاً همان اروری که گزارش شد). حالا اگر این خطا رخ بدهد، متن کوتاه‌شده دوباره فرستاده می‌شود.
+        welcome_text = _welcome_text(callback.from_user.first_name)
+        try:
+            await callback.message.edit_text(welcome_text)
+        except TelegramBadRequest as e:
+            if is_message_too_long_error(e):
+                logger.error("متن خوش‌آمدگویی (پیش‌نمایش %d کاراکتر) در check_join از سقف تلگرام بیشتر بود؛ کوتاه شد و دوباره فرستاده شد.", len(welcome_text))
+                await callback.message.edit_text(truncate_for_telegram(welcome_text))
+            else:
+                raise
         await show_menu_with_sticker(
             callback.bot, callback.message.chat.id, "join_confirmed",
             t("start_join_confirmed"), reply_markup=get_main_keyboard(callback.from_user.id),
