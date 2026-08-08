@@ -25,7 +25,7 @@ import database as db
 import crypto
 import alerts
 from subscription import extract_meta, days_remaining, format_bytes, usage_bar, fetch_subscription_info, format_expire
-from utils import parse_int_in_range, is_duplicate_action, now_tehran_naive, STICKER_SECTION_LABELS, STICKER_FILES, STICKERS_DIR, invalidate_section_sticker_cache, send_notification_sticker, clean_numeric_id
+from utils import parse_int_in_range, is_duplicate_action, now_tehran_naive, STICKER_SECTION_LABELS, STICKER_FILES, STICKERS_DIR, invalidate_section_sticker_cache, send_notification_sticker, clean_numeric_id, TELEGRAM_TEXT_LIMIT, truncate_for_telegram, is_message_too_long_error
 from states import AdminStates, UserStates
 import bot_info
 import payments
@@ -333,7 +333,7 @@ async def admin_manage_admins(callback: types.CallbackQuery):
         pass
     await callback.answer()
 
-# 🐛 ﻿فیکس: دکمه‌ی «مدیریت ادمین‌ها» قبلاً فقط داخل پنل اینلاین بود، طبق درخواست کاربر الان به منوی پایین صفحه (reply keyboard) هم منتقل شد.
+# 🐛 فیکس: دکمه‌ی «مدیریت ادمین‌ها» قبلاً فقط داخل پنل اینلاین بود، طبق درخواست کاربر الان به منوی پایین صفحه (reply keyboard) هم منتقل شد.
 @router.message(F.text == "👮 مدیریت ادمین‌ها")
 async def admin_manage_admins_from_menu(message: types.Message, state: FSMContext):
     if not _is_main_admin(message.from_user.id):
@@ -566,14 +566,29 @@ async def admin_error_log_detail(callback: types.CallbackQuery):
     if log is None:
         await callback.answer("❌ یافت نشد.", show_alert=True)
         return
-    tb = html.escape(str(log.get("traceback") or "")[:3500])
-    text = (
-        f"⚠️ {html.escape(str(log['error_type']))}\n"
-        f"🕐 {html.escape(str(log.get('occurred_at') or ''))}\n\n"
-        f"📝 {html.escape(str(log.get('message') or ''))}\n\n"
-        f"<pre>{tb}</pre>"
+    # 🆕 فیکس: قبلاً پیام خطا جداگانه از یک طول ثابت (message تا ۲۰۰۰ کاراکتر + traceback تا ۳۵۰۰ کاراکتر) ساخته می‌شد؛ اگر خطایی با پیام (message) طولانی ثبت می‌شد (مثلاً همین خطای «MESSAGE_TOO_LONG»)، مجموع این دو می‌توانست از سقف تلگرام (۴۰۹۶) رد شود و خود صفحه‌ی «لاگ خطاها» هم با همان خطا مواجه می‌شد و ادمین اصلاً نمی‌توانست جزئیات را ببیند. حالا طول قابل‌نمایش traceback پویا بر اساس طول واقعی بقیه محاسبه می‌شود تا مجموع همیشه زیر سقف تلگرام بماند، و بازهم یک try/except محافظتی اضافه شده تا اگر بازهم محاسبه جایی کم بیافتاد، پیام با یک نسخه‌ی کاملاً مختصر‌شده بازهم فرستاده شود تا این بخش از پنل ادمین هرگز با ارور متوقف نشود.
+    error_type_display = html.escape(str(log["error_type"]))
+    occurred_at_display = html.escape(str(log.get("occurred_at") or ""))
+    message_display = html.escape(str(log.get("message") or "")[:300])
+    header = (
+        f"⚠️ {error_type_display}\n"
+        f"🕐 {occurred_at_display}\n\n"
+        f"📝 {message_display}\n\n"
     )
-    await callback.message.edit_text(text, reply_markup=admin_error_log_detail_keyboard())
+    wrapper_len = len("<pre></pre>")
+    max_tb_len = max(TELEGRAM_TEXT_LIMIT - len(header) - wrapper_len - 20, 200)
+    tb = html.escape(str(log.get("traceback") or "")[:max_tb_len])
+    text = f"{header}<pre>{tb}</pre>"
+    try:
+        await callback.message.edit_text(text, reply_markup=admin_error_log_detail_keyboard())
+    except TelegramBadRequest as e:
+        if is_message_too_long_error(e):
+            fallback_text = truncate_for_telegram(
+                f"⚠️ {error_type_display}\n🕐 {occurred_at_display}\n\n📝 {message_display}"
+            )
+            await callback.message.edit_text(fallback_text, reply_markup=admin_error_log_detail_keyboard())
+        else:
+            raise
     await callback.answer()
 
 
@@ -988,7 +1003,7 @@ async def approve_purchase(callback: types.CallbackQuery):
     try:
         _discount_note = f"\n🎟 کد تخفیف {pending['discount_code']} برای این خرید مصرف شد." if pending and pending.get("discount_code") else ""
         _confirm_text = user_text("notif_purchase_approved", plan_name=plan["name"], discount_note=_discount_note)
-        # fix: به کاربر بگوییم کد تخفیفش همین تأیید مصرف شده تا گیج نشود چرا دیگر قابل‌استفاده نیست.
+        # fix: به کاربر بگوییم کد تخفیف همین تأیید مصرف شده تا گیج نشود چرا دیگر قابل‌استفاده نیست.
         if pending and pending.get("discount_code"):
             _confirm_text += f"\n🎟 کد تخفیف {pending['discount_code']} برای این خرید مصرف شد."
         await send_notification_sticker(callback.bot, int(uid), "notif_purchase_approved")
@@ -1422,6 +1437,12 @@ async def admin_text_edit_save(message: types.Message, state: FSMContext):
     value = (message.text or "").strip()
     if not value:
         await message.answer("❌ متن نمی‌تواند خالی باشد:"); return
+    # 🆕 فیکس: اگر این متن از سقف مجاز تلگرام برای متن پیام (۴۰۹۶ کاراکتر) بلندتر ذخیره شود، بعداً هر‌بار که این متن (مثلاً برای فاکتور، پیام راهنما و غیره) برای کاربر فرستاده شود، تلگرام خطای «MESSAGE_TOO_LONG» برمی‌گرداند. اینجا قبل از ذخیره‌شدن گرفته می‌شود (علاوه بر محافظتی که در show_menu_with_sticker اضافه شد).
+    if len(value) > 3800:
+        await message.answer(
+            f"❌ این متن خیلی طولانی است ({len(value)} کاراکتر) و ممکن است تلگرام آن را رد کند (سقف تلگرام: ۴۰۹۶ کاراکتر). لطفاً متن کوتاه‌تری بفرست:"
+        )
+        return
     # جلوگیری از خراب‌شدن فاکتور با حذف متغیرهای سیستمی
     required = set(_template_vars(TEXT_KEYS[key]))
     if required:
@@ -3769,6 +3790,12 @@ async def admin_botinfo_edit_save(message: types.Message, state: FSMContext):
             )
             return
         value = cleaned
+    # 🆕 فیکس: اگر این مقدار (مثلاً پیام خوش‌آمدگویی /start) از سقف مجاز تلگرام برای متن پیام (۴۰۹۶ کاراکتر) بلندتر ذخیره شود، بعداً هر بار که این متن (به‌همراه متن ثابت دیگری که دورش چسبیده می‌شود) فرستاده شود، تلگرام خطای «Bad Request: MESSAGE_TOO_LONG» برمی‌گرداند و منوی مربوطه (مثلاً /start برای هر کاربر) با ارور مواجه می‌شد. اینجا قبل از ذخیره‌شدن جلوی این حالت گرفته می‌شود (علاوه بر محافظتی که در show_menu_with_sticker اضافه شد).
+    if len(value) > 3800:
+        await message.answer(
+            f"❌ این متن خیلی طولانی است ({len(value)} کاراکتر) و ممکن است تلگرام آن را رد کند (سقف تلگرام: ۴۰۹۶ کاراکتر). لطفاً متن کوتاه‌تری بفرست:"
+        )
+        return
     bot_info.set(key, value)
     await state.clear()
     await message.answer(f"✅ «{labels[key]}» به‌روز شد.", reply_markup=admin_botinfo_menu())
@@ -3807,8 +3834,12 @@ async def admin_botinfo_channel_add_save(message: types.Message, state: FSMConte
     if not _is_admin(message.from_user.id):
         return
     parts = [p.strip() for p in (message.text or "").split("|")]
-    if len(parts) != 3 or not parts[0]:
-        await message.answer("❌ فرمت نادرست. دوباره تلاش کنید یا /cancel بزنید.")
+    # 🐛 فیکس: قبلاً فقط خالی‌نبودن آیدی کانال (parts[0]) چک می‌شد؛ اگر ادمین لینک دعوت
+    # (parts[2]) را خالی می‌فرستاد یا فراموش می‌کرد، همان مقدار خالی مستقیم به‌عنوان url
+    # دکمه‌ی «عضویت» ذخیره می‌شد و بعداً برای هر کاربری که هنوز عضو نشده بود، تلگرام موقع
+    # نمایش منوی عضویت اجباری خطای BUTTON_URL_INVALID می‌داد و /start با ارور مواجه می‌شد.
+    if len(parts) != 3 or not parts[0] or not parts[2]:
+        await message.answer("❌ فرمت نادرست یا لینک دعوت خالی است. هر سه بخش (آیدی | نام | لینک دعوت) باید پر باشند. دوباره تلاش کنید یا /cancel بزنید.")
         return
     raw_chat_id, name, url = parts
     raw_chat_id = clean_numeric_id(raw_chat_id)
