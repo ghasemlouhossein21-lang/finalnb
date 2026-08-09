@@ -23,20 +23,106 @@ logger = logging.getLogger(__name__)
 TELEGRAM_TEXT_LIMIT = 4096
 
 
+def telegram_utf16_length(text: str) -> int:
+    return len((text or "").encode("utf-16-le")) // 2
+
+
 def truncate_for_telegram(text: str, limit: int = TELEGRAM_TEXT_LIMIT) -> str:
-    """اگر متن از سقف مجاز طول پیام تلگرام بیشتر باشد، آن را کوتاه می‌کند و یک یادداشت کوتاه به انتهایش اضافه می‌کند؛ در غیر این‌صورت متن بدون تغییر برمی‌گردد. هر جایی که احتمال ارسال یک متن طولانی/قابل‌ویرایش (مثلاً پیام خوش‌آمدگویی یا هر متن دیگری که ادمین از پنل ویرایش کرده) وجود دارد، باید قبل از ارسال از این تابع استفاده کند (نه فقط در show_menu_with_sticker)."""
+    """کوتاه‌کردن امن متن بر اساس UTF-16 مورد استفاده Telegram."""
     if text is None:
         return text
-    if len(text) <= limit:
+    if telegram_utf16_length(text) <= limit:
         return text
     suffix = "\n\n… (متن به‌دلیل محدودیت طول پیام تلگرام کوتاه شد)"
-    return text[: limit - len(suffix)] + suffix
+    available = max(0, limit - telegram_utf16_length(suffix))
+    raw = (text or "").encode("utf-16-le")[:available * 2]
+    while raw:
+        try:
+            head = raw.decode("utf-16-le")
+            break
+        except UnicodeDecodeError:
+            raw = raw[:-2]
+    else:
+        head = ""
+    return head + suffix
 
 
 def is_message_too_long_error(exc: Exception) -> bool:
-    """تشخیص می‌دهد که آیا یک TelegramBadRequest دقیقاً از نوع «MESSAGE_TOO_LONG» است (و مثلاً یک خطای مربوط به parse mode نیست)؛ تا همه‌جا یکسان تشخیص داده شود."""
-    return "message is too long" in str(exc).lower()
+    msg = str(exc).lower()
+    return "message is too long" in msg or "message_too_long" in msg
 
+
+def serialize_message_entities(entities) -> list[dict]:
+    result = []
+    for entity in entities or []:
+        try:
+            data = entity.model_dump(mode="json", exclude_none=True) if hasattr(entity, "model_dump") else dict(entity)
+            result.append({k: v for k, v in data.items() if v is not None})
+        except Exception:
+            logger.exception("خطا در serialize کردن MessageEntity")
+    return result
+
+
+def message_entities_from_dicts(entity_dicts) -> list:
+    from aiogram.types import MessageEntity
+    result = []
+    for data in entity_dicts or []:
+        try:
+            result.append(MessageEntity(**data))
+        except Exception:
+            logger.exception("MessageEntity ذخیره‌شده نامعتبر بود و نادیده گرفته شد")
+    return result
+
+
+def adjust_entities_for_replacement(entities: list, old_text: str, new_text: str, old_token: str = "{name}") -> list:
+    """offset/length Entityها را پس از جایگزینی یک placeholder اصلاح می‌کند."""
+    if old_text == new_text:
+        return entities
+    pos = old_text.find(old_token)
+    if pos < 0:
+        return entities
+
+    old_start = telegram_utf16_length(old_text[:pos])
+    old_end = old_start + telegram_utf16_length(old_token)
+    delta = telegram_utf16_length(new_text) - telegram_utf16_length(old_text)
+    new_start = old_start
+    new_token_len = telegram_utf16_length(new_text[pos:]) - telegram_utf16_length(old_text[pos + len(old_token):])
+    new_end = new_start + new_token_len
+
+    out = []
+    for e in entities:
+        start, end = int(e.offset), int(e.offset + e.length)
+        ns, ne = start, end
+        if start >= old_end:
+            ns, ne = start + delta, end + delta
+        elif end <= old_start:
+            pass
+        else:
+            if start >= old_start:
+                ns = new_start
+            if end <= old_end:
+                ne = new_end
+            else:
+                ne = end + delta
+        if ne <= ns:
+            continue
+        try:
+            out.append(e.model_copy(update={"offset": ns, "length": ne - ns}))
+        except Exception:
+            logger.exception("خطا در اصلاح offset یک MessageEntity")
+    return out
+
+
+def truncate_text_and_entities(text: str, entities: list | None, limit: int = TELEGRAM_TEXT_LIMIT):
+    """نسخه‌ی کوتاه‌شده‌ی متن را همراه Entityهای سالمِ باقی‌مانده برمی‌گرداند."""
+    safe = truncate_for_telegram(text, limit)
+    if safe == text or not entities:
+        return safe, entities or []
+    # طول بخش اصلی قبل از suffix؛ Entityهایی که کامل در این محدوده‌اند حفظ می‌شوند.
+    suffix = "\n\n… (متن به‌دلیل محدودیت طول پیام تلگرام کوتاه شد)"
+    cutoff = telegram_utf16_length(safe) - telegram_utf16_length(suffix)
+    kept = [e for e in entities if int(e.offset) + int(e.length) <= cutoff]
+    return safe, kept
 
 def get_main_keyboard(user_id):
     """منوی دائمی پایین صفحه را برمی‌گرداند — مگر اینکه برای این کاربر
@@ -315,6 +401,7 @@ async def show_menu_with_sticker(
     reply_markup=None,
     parse_mode: str | None = None,
     show_main_keyboard: bool = True,
+    entities=None,
 ):
     """یک پیام منوی تازه می‌فرستد (همیشه پیام جدید، نه ویرایش پیام قبلی) و اگر
     sticker_key داده شده باشد، درست بالای همان منو یک استیکر می‌فرستد.
@@ -410,19 +497,19 @@ async def show_menu_with_sticker(
             logger.exception("خطا در ارسال پیام نامرئی تازه‌سازی منوی پایین صفحه")
 
     try:
-        menu_msg = await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode=parse_mode)
+        menu_msg = await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode=parse_mode, entities=entities)
     except TelegramBadRequest as e:
         # 🆕 فیکس: اگر متنی که ادمین از پنل ویرایش کرده (مثلاً پیام خوش‌آمدگویی /start یا هر متن قابل‌ویرایش دیگری) از سقف مجاز تلگرام برای متن پیام (۴۰۹۶ کاراکتر) بلندتر باشد، تلگرام خطای «Bad Request: MESSAGE_TOO_LONG» برمی‌گرداند و قبلاً هیچ‌وقت دوباره تلاشی نمی‌شد (چون فقط حالت parse_mode دست‌کاری می‌شد)؛ برای کاربرانی که تازه روی /start می‌زدند (بیشتر از همه کاربران جدید) کل منوی /start با ارور مواجه می‌شد. حالا اگر خطا دقیقاً همین باشد، متن کوتاه شده دوباره فرستاده می‌شود تا کاربر هیچ‌وقت با خطا مواجه نشود.
         if is_message_too_long_error(e):
             logger.error(
                 "متن منو (پیش‌نمایش %d کاراکتر) از سقف تلگرام (۴۰۹۶) بیشتر بود؛ کوتاه شد و دوباره فرستاده شد.", len(text),
             )
-            safe_text = truncate_for_telegram(text)
+            safe_text, safe_entities = truncate_text_and_entities(text, entities)
             try:
-                menu_msg = await bot.send_message(chat_id=chat_id, text=safe_text, reply_markup=reply_markup, parse_mode=parse_mode)
+                menu_msg = await bot.send_message(chat_id=chat_id, text=safe_text, reply_markup=reply_markup, parse_mode=parse_mode, entities=safe_entities)
             except TelegramBadRequest:
                 try:
-                    menu_msg = await bot.send_message(chat_id=chat_id, text=safe_text, reply_markup=reply_markup, parse_mode=None)
+                    menu_msg = await bot.send_message(chat_id=chat_id, text=safe_text, reply_markup=reply_markup, parse_mode=None, entities=None)
                 except Exception:
                     # 🆕 لایه‌ی محافظتی نهایی: اگر حتی نسخه‌ی کوتاه‌شده و بدون‌فرمت هم رد شد (مثلاً چون خودِ کیبورد/دکمه مشکل دارد، نه متن)، دیگر هیچ تلاش دیگری برای این نسخه نمی‌شود؛ همان پیام حداقلی نهایی (بدون کیبورد سفارشی) فرستاده می‌شود تا کاربر هیچ‌وقت با سکوت کامل مواجه نشود.
                     logger.exception("حتی نسخه‌ی کوتاه‌شده‌ی پیام منو هم ارسال نشد؛ آخرین تلاش بدون کیبورد/فرمت انجام می‌شود")
