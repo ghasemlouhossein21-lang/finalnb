@@ -830,12 +830,12 @@ async def _deliver_marzban_link(bot, ctx: dict, link: str):
             sent = await bot.send_photo(
                 int(uid), photo, caption=caption, reply_markup=config_delivery_keyboard()
             )
-            await bot.send_message(int(uid), "⬇️ منوی اصلی شما همچنان در دسترس است.", reply_markup=main_reply_keyboard())
+            await bot.send_message(int(uid), "⬇️ منوی اصلی در پایین صفحه قابل دسترسی است.", reply_markup=main_reply_keyboard())
             return sent.photo[-1].file_id if sent.photo else None
         await bot.send_message(
             int(uid), caption, reply_markup=config_delivery_keyboard()
         )
-        await bot.send_message(int(uid), "⬇️ منوی اصلی شما همچنان در دسترس است.", reply_markup=main_reply_keyboard())
+        await bot.send_message(int(uid), "⬇️ منوی اصلی در پایین صفحه قابل دسترسی است.", reply_markup=main_reply_keyboard())
         return None
 
     # 🆕 فیکس سرعت: قبلاً ارسال کانفیگ به مشتری، پیام تأیید به ادمین، و ثبت لاگ سفارش در کانال
