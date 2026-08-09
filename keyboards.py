@@ -428,12 +428,6 @@ def admin_panel_menu(orders_enabled: bool = True, permissions: set[str] | None =
 
     if is_main_admin:
         buttons.append(InlineKeyboardButton(text="👮 مدیریت ادمین‌ها", callback_data="admin_manage_admins", style="danger"))
-    if allowed("orders_toggle"):
-        buttons.append(InlineKeyboardButton(
-            text=("🔴 خاموش کردن سفارشات" if orders_enabled else "🟢 روشن کردن سفارشات"),
-            callback_data=("admin_orders_off" if orders_enabled else "admin_orders_on"),
-            style=("danger" if orders_enabled else "success"),
-        ))
 
     if not buttons:
         buttons.append(InlineKeyboardButton(text="⛔ هیچ دسترسی فعالی ندارید", callback_data="noop", style="danger"))
