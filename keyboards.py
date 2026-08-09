@@ -557,12 +557,29 @@ def admin_purchase_notify_keyboard(uid: str, plan_key: str | None = None, order_
 
 
 
-def config_delivery_keyboard(guide_url: str):
-    buttons = []
-    if guide_url and guide_url.strip().lower().startswith(("http://", "https://")):
-        buttons.append([InlineKeyboardButton(text="🧑‍🦯 دریافت روش اتصال", url=guide_url, style="primary")])
-    buttons.append([InlineKeyboardButton(text="🟢 بازگشت به منو اصلی", callback_data="back", style="success")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+# شناسه ثابت بخش‌های راهنمایی که برای دکمه‌های تحویل سرویس انتخاب شده‌اند.
+# این اعداد همان id ستون جدول guides هستند و با تغییر عنوان راهنماها، مقصد دکمه‌ها تغییر نمی‌کند.
+DELIVERY_APPS_GUIDE_ID = 8
+DELIVERY_CONNECTION_GUIDE_ID = 4
+
+
+def config_delivery_keyboard(guide_url: str | None = None):
+    """دکمه‌های شیشه‌ای تحویل سرویس؛ هر دکمه مستقیماً همان بخش راهنمای مشخص‌شده را باز می‌کند."""
+    apps_text = db.get_text_override("service_delivery_apps_button", "📱 لینک برنامه‌ها")
+    connection_text = db.get_text_override("service_delivery_connection_button", "🔧 نحوه اتصال کانفینگ")
+
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=apps_text,
+            callback_data=f"guideopen_{DELIVERY_APPS_GUIDE_ID}",
+            style="primary",
+        )],
+        [InlineKeyboardButton(
+            text=connection_text,
+            callback_data=f"guideopen_{DELIVERY_CONNECTION_GUIDE_ID}",
+            style="primary",
+        )],
+    ])
 
 
 def ticket_reply_keyboard(uid: str):
