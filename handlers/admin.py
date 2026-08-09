@@ -25,7 +25,7 @@ import database as db
 import crypto
 import alerts
 from subscription import extract_meta, days_remaining, format_bytes, usage_bar, fetch_subscription_info, format_expire
-from utils import parse_int_in_range, is_duplicate_action, now_tehran_naive, STICKER_SECTION_LABELS, STICKER_FILES, STICKERS_DIR, invalidate_section_sticker_cache, send_notification_sticker, clean_numeric_id, TELEGRAM_TEXT_LIMIT, truncate_for_telegram, is_message_too_long_error
+from utils import parse_int_in_range, is_duplicate_action, now_tehran_naive, STICKER_SECTION_LABELS, STICKER_FILES, STICKERS_DIR, invalidate_section_sticker_cache, send_notification_sticker, clean_numeric_id, TELEGRAM_TEXT_LIMIT, truncate_for_telegram, is_message_too_long_error, serialize_message_entities
 from states import AdminStates, UserStates
 import bot_info
 import payments
@@ -3790,13 +3790,20 @@ async def admin_botinfo_edit_save(message: types.Message, state: FSMContext):
             )
             return
         value = cleaned
-    # 🆕 فیکس: اگر این مقدار (مثلاً پیام خوش‌آمدگویی /start) از سقف مجاز تلگرام برای متن پیام (۴۰۹۶ کاراکتر) بلندتر ذخیره شود، بعداً هر بار که این متن (به‌همراه متن ثابت دیگری که دورش چسبیده می‌شود) فرستاده شود، تلگرام خطای «Bad Request: MESSAGE_TOO_LONG» برمی‌گرداند و منوی مربوطه (مثلاً /start برای هر کاربر) با ارور مواجه می‌شد. اینجا قبل از ذخیره‌شدن جلوی این حالت گرفته می‌شود (علاوه بر محافظتی که در show_menu_with_sticker اضافه شد).
-    if len(value) > 3800:
+    # متن را تا سقف واقعی Telegram Bot API می‌پذیریم. مسیر /start هنگام ارسال
+    # متن ثابت پایین را هم حساب می‌کند و اگر مجموع از سقف عبور کند، امن کوتاه می‌شود.
+    from utils import telegram_utf16_length
+    if telegram_utf16_length(value) > TELEGRAM_TEXT_LIMIT:
         await message.answer(
-            f"❌ این متن خیلی طولانی است ({len(value)} کاراکتر) و ممکن است تلگرام آن را رد کند (سقف تلگرام: ۴۰۹۶ کاراکتر). لطفاً متن کوتاه‌تری بفرست:"
+            f"❌ متن از سقف تلگرام بیشتر است. سقف واقعی: {TELEGRAM_TEXT_LIMIT} واحد UTF-16. لطفاً متن کوتاه‌تری بفرست:"
         )
         return
-    bot_info.set(key, value)
+    if key == "welcome_text":
+        # Custom/Premium Emoji به‌صورت MessageEntity می‌آید؛ ذخیره‌ی صرفِ message.text
+        # شناسه‌ی emoji را از بین می‌برد.
+        bot_info.set_welcome_text_with_entities(value, serialize_message_entities(message.entities))
+    else:
+        bot_info.set(key, value)
     await state.clear()
     await message.answer(f"✅ «{labels[key]}» به‌روز شد.", reply_markup=admin_botinfo_menu())
 
