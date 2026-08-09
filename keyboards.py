@@ -42,9 +42,12 @@ def InlineKeyboardButton(*args, **kwargs):
 # عضویت اجباری
 # ---------------------------------------------------------------------------
 def join_channels_keyboard(channels):
-    buttons = [[InlineKeyboardButton(text=f"📢 {ch['name']}", url=ch["url"], style="primary")] for ch in channels]
-    buttons.append([InlineKeyboardButton(text=t("join_confirm"), callback_data="check_join", style="success")])
-    return InlineKeyboardMarkup(inline_keyboard=[buttons[i:i+2] for i in range(0, len(buttons), 2)])
+    rows = [
+        [InlineKeyboardButton(text=f"📢 {ch['name']}", url=ch["url"], style="primary")]
+        for ch in channels
+    ]
+    rows.append([InlineKeyboardButton(text=t("join_confirm"), callback_data="check_join", style="success")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 # ---------------------------------------------------------------------------
