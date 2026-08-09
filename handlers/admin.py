@@ -50,6 +50,7 @@ from keyboards import (
     admin_purchase_notify_keyboard,
     admin_userlist_menu,
     config_delivery_keyboard,
+    main_reply_keyboard,
     admin_services_list_keyboard,
     admin_service_detail_keyboard,
     admin_order_queue_keyboard,
@@ -293,6 +294,22 @@ def _format_volume_gb_label(volume_gb) -> str:
         mb = round(v * 1024)
         return f"{mb} مگابایت"
     return f"{int(v) if v.is_integer() else v:g} گیگابایت"
+
+
+
+def _english_digits(value) -> str:
+    text = str(value if value is not None else "")
+    return text.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+
+
+def _delivery_service_label(plan_name, volume_gb, days, plan_key=None) -> str:
+    """نام نمایشی تحویل سرویس طبق فرمت جدید مشتری."""
+    if plan_key == FREE_TEST_PLAN_KEY:
+        return "تست رایگان"
+    name = (plan_name or "سرویس").strip()
+    volume_text = _format_volume_gb_label(volume_gb) if volume_gb is not None else "نامشخص"
+    days_text = f"{days} روز" if days else "نامحدود"
+    return _english_digits(f"{name} | {volume_text} | {days_text}")
 
 def _gb_from_bytes(num_bytes) -> float | None:
     if not num_bytes:
@@ -1249,17 +1266,15 @@ async def _finalize_send(message: types.Message, state: FSMContext):
     days_text = f"{days} روز" if days is not None else "نامحدود"
     user_limit_text = str(user_limit) if user_limit else "نامحدود"
 
-    caption = (
-        "✅ سرویس با موفقیت ایجاد شد\n\n"
-        f"👤 نام کاربری سرویس : {name}\n"
-        "🇺🇳 لوکیشن: مولتی لوکیشن+تانل\n"
-        f"⏳ مدت زمان: {days_text}\n"
-        f"🗜 حجم سرویس: {volume_text}\n"
-        f"👤 تعداد کاربر:{user_limit_text}\n\n"
-        "لینک اتصال:\n"
-        f"{sub_link}\n\n"
-        "🧑‍💻 شما میتوانید شیوه اتصال را با فشردن دکمه زیر دریافت کنید."
-    )
+    plan_name_for_delivery = None
+    if plan_order_id:
+        plan_order = db.get_order(plan_order_id)
+        if plan_order and plan_order.get("plan_key"):
+            plan_obj = db.get_effective_plan(plan_order["plan_key"])
+            if plan_obj:
+                plan_name_for_delivery = plan_obj.get("name")
+    delivery_label = _delivery_service_label(plan_name_for_delivery, volume_gb, days, plan_order.get("plan_key") if plan_order_id and plan_order else None) if plan_name_for_delivery or plan_order_id else _delivery_service_label(name, volume_gb, days)
+    caption = t("service_delivery_text", service_label=_english_digits(delivery_label), link=sub_link)
 
     expiry_date = None
     if days is not None:
@@ -1280,17 +1295,15 @@ async def _finalize_send(message: types.Message, state: FSMContext):
 
     try:
         await send_notification_sticker(message.bot, int(uid), "notif_service_delivery")
-        try:
-            await message.bot.send_message(int(uid), db.get_text_override("notif_service_delivery", "📦 سرویس شما آماده شد ⬇️"), reply_markup=types.ReplyKeyboardRemove())
-            db.set_keyboard_hidden(int(uid), True)
-        except Exception:
-            pass
         await message.bot.send_photo(
             int(uid),
             qr_file_id,
             caption=caption,
-            reply_markup=config_delivery_keyboard(bot_info.get('connection_guide_url')),
+            reply_markup=config_delivery_keyboard(),
         )
+        # منوی پایینی دائمی کاربر نباید بعد از تحویل سرویس مخفی شود.
+        db.set_keyboard_hidden(int(uid), False)
+        await message.bot.send_message(int(uid), "⬇️ منوی اصلی شما همچنان در دسترس است.", reply_markup=main_reply_keyboard())
         await message.answer("✅ کانفیگ برای کاربر ارسال شد.")
         await _notify_main_admin_action(message.bot, message.from_user, "ارسال کانفیگ", uid, plan_name)
     except Exception as e:
