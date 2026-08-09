@@ -50,7 +50,8 @@ import marzban
 import vpn_panel
 import fsm_storage
 import bot_info
-from config import MARZBAN_ENABLED, ADMIN_ID
+from text_catalog import text as t
+from config import MARZBAN_ENABLED, ADMIN_ID, FREE_TEST_PLAN_KEY
 from states import AdminStates
 from keyboards import (
     admin_marzban_menu,
@@ -60,6 +61,7 @@ from keyboards import (
     marzban_map_vip_plans_keyboard,
     marzban_plan_pick_keyboard,
     config_delivery_keyboard,
+    main_reply_keyboard,
     admin_panel_menu,
 )
 from utils import is_duplicate_action, now_tehran_naive, parse_int_in_range
@@ -116,6 +118,21 @@ def _actual_volume_gb_from_panel_response(data, fallback=None):
 
     return fallback
 logger = logging.getLogger(__name__)
+
+
+def _english_digits(value) -> str:
+    text = str(value if value is not None else "")
+    return text.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+
+
+def _delivery_service_label(plan_name, volume_gb, days, plan_key=None) -> str:
+    if plan_key == FREE_TEST_PLAN_KEY:
+        return "تست رایگان"
+    name = (plan_name or "سرویس").strip()
+    volume_text = _format_volume_gb_label(volume_gb) if volume_gb is not None else "نامشخص"
+    days_text = f"{days} روز" if days else "نامحدود"
+    return _english_digits(f"{name} | {volume_text} | {days_text}")
+
 
 try:
     import qrcode
@@ -786,17 +803,8 @@ async def _deliver_marzban_link(bot, ctx: dict, link: str):
     user_limit_text = str(user_limit) if user_limit else "نامحدود"
     expiry_date = (now_tehran_naive() + timedelta(days=days)).strftime("%Y-%m-%d") if days else None
 
-    caption = (
-        "✅ سرویس با موفقیت ایجاد شد\n\n"
-        f"👤 نام کاربری سرویس : {name}\n"
-        "🇺🇳 لوکیشن: مولتی لوکیشن+تانل\n"
-        f"⏳ مدت زمان: {days_text}\n"
-        f"🗜 حجم سرویس: {volume_text}\n"
-        f"👤 تعداد کاربر:{user_limit_text}\n\n"
-        "لینک اتصال:\n"
-        f"{link}\n\n"
-        "🧑‍🦯 شما میتوانید شیوه اتصال را با فشردن دکمه زیر دریافت کنید."
-    )
+    delivery_label = _delivery_service_label(name, volume_gb, days, plan_key)
+    caption = t("service_delivery_text", service_label=delivery_label, link=link)
 
     encrypted = crypto.encrypt_config(link)
     plan_name = f"{name} | {volume_text} | {days_text}"
@@ -815,20 +823,19 @@ async def _deliver_marzban_link(bot, ctx: dict, link: str):
         db.set_custom_order_status(order_id, "fulfilled")
 
     async def _send_to_customer():
-        try:
-            await bot.send_message(int(uid), "📦 سرویس شما آماده شد ⬇️", reply_markup=types.ReplyKeyboardRemove())
-            db.set_keyboard_hidden(int(uid), True)
-        except Exception:
-            pass
+        # منوی پایینی کاربر نباید هنگام تحویل سرویس حذف شود.
+        db.set_keyboard_hidden(int(uid), False)
         if qrcode:
             photo = types.BufferedInputFile(_make_qr_bytes(link), filename="qr.png")
             sent = await bot.send_photo(
-                int(uid), photo, caption=caption, reply_markup=config_delivery_keyboard(bot_info.get('connection_guide_url'))
+                int(uid), photo, caption=caption, reply_markup=config_delivery_keyboard()
             )
+            await bot.send_message(int(uid), "⬇️ منوی اصلی شما همچنان در دسترس است.", reply_markup=main_reply_keyboard())
             return sent.photo[-1].file_id if sent.photo else None
         await bot.send_message(
-            int(uid), caption, reply_markup=config_delivery_keyboard(bot_info.get('connection_guide_url'))
+            int(uid), caption, reply_markup=config_delivery_keyboard()
         )
+        await bot.send_message(int(uid), "⬇️ منوی اصلی شما همچنان در دسترس است.", reply_markup=main_reply_keyboard())
         return None
 
     # 🆕 فیکس سرعت: قبلاً ارسال کانفیگ به مشتری، پیام تأیید به ادمین، و ثبت لاگ سفارش در کانال
