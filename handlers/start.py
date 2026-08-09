@@ -17,7 +17,11 @@ from aiogram.exceptions import TelegramBadRequest
 
 import database as db
 from text_catalog import text as t
-from utils import show_menu_with_sticker, get_main_keyboard, truncate_for_telegram, is_message_too_long_error
+from utils import (
+    show_menu_with_sticker, get_main_keyboard, truncate_for_telegram,
+    is_message_too_long_error, message_entities_from_dicts,
+    adjust_entities_for_replacement, truncate_text_and_entities,
+)
 from keyboards import (
     join_channels_keyboard,
     main_reply_keyboard,
@@ -89,16 +93,25 @@ async def _notify_referrer_of_new_join(bot, user: dict):
         logger.error(f"failed to notify referrer {referrer['telegram_id']}: {e}")
 
 
-def _welcome_text(first_name: str) -> str:
-    # 🐛 فیکس: قبلاً این متن کاملاً تایقی در کد ثابت بود و مقدار ذخیره‌شده از پنل ادمین («ℹ️ اطلاعات ربات» → «پیام خوش‌آمدگویی /start») اصلاً خوانده نمی‌شد؛ ادمین ذخیره می‌کرد ولی هیچ‌وقت در ربات واقعی دیده نمی‌شد. حالا از bot_info.get("welcome_text") خوانده می‌شود؛ اگر متن ذخیره‌شده شامل "{name}" باشد، با نام کوچک کاربر جایگزین می‌شود.
-    template = bot_info.get("welcome_text")
+def _welcome_text_and_entities(first_name: str):
+    """متن /start را همراه با Entityهای Telegram می‌سازد تا Custom Emoji حفظ شود."""
+    template, entity_dicts = bot_info.get_welcome_text_with_entities()
+    original = template
+    entities = message_entities_from_dicts(entity_dicts)
+
     if "{name}" in template:
-        template = template.replace("{name}", first_name)
-    return (
-        f"{template}\n\n"
-        f"از منوی پایین صفحه می‌توانید به همه‌ی امکانات ربات دسترسی داشته باشید.\n\n"
-        f"لطفاً یکی از گزینه‌ها را انتخاب کنید 👇"
+        template = template.replace("{name}", first_name, 1)
+        entities = adjust_entities_for_replacement(entities, original, template, "{name}")
+
+    template += (
+        "\n\nاز منوی پایین صفحه می‌توانید به همه‌ی امکانات ربات دسترسی داشته باشید."
+        "\n\nلطفاً یکی از گزینه‌ها را انتخاب کنید 👇"
     )
+    return template, entities
+
+
+def _welcome_text(first_name: str) -> str:
+    return _welcome_text_and_entities(first_name)[0]
 
 
 def _is_admin(user_id: int) -> bool:
@@ -198,9 +211,10 @@ async def _start_impl(message: types.Message, command: CommandObject, state: FSM
         )
         return
 
+    welcome_text, welcome_entities = _welcome_text_and_entities(message.from_user.first_name)
     await show_menu_with_sticker(
-        message.bot, message.chat.id, "start_welcome",
-        _welcome_text(message.from_user.first_name), reply_markup=get_main_keyboard(message.from_user.id),
+        message.bot, message.chat.id, "start_welcome", welcome_text,
+        reply_markup=get_main_keyboard(message.from_user.id), entities=welcome_entities,
     )
 
 
@@ -249,13 +263,14 @@ async def _check_join_impl(callback: types.CallbackQuery, state: FSMContext):
         await callback.message.answer("منوی مدیریتی فعال شد:", reply_markup=_admin_reply_kb_for(callback.from_user.id))
     else:
         # 🆕 فیکس: این مسیر (تأیید عضویت پس از عضو کانال‌ها) مستقیماً با edit_text فرستاده می‌شد و از محافظتی که در show_menu_with_sticker اضافه شده بود عبور نمی‌کرد، پس اگر متن خوش‌آمدگویی (welcome_text) توسط ادمین طولانی ذخیره می‌شد، همینجا هم تلگرام خطای «MESSAGE_TOO_LONG» برمی‌گرداند و کاربر بعد از تأیید عضویت هم با ارور مواجه می‌شد (دقیقاً همان اروری که گزارش شد). حالا اگر این خطا رخ بدهد، متن کوتاه‌شده دوباره فرستاده می‌شود.
-        welcome_text = _welcome_text(callback.from_user.first_name)
+        welcome_text, welcome_entities = _welcome_text_and_entities(callback.from_user.first_name)
         try:
-            await callback.message.edit_text(welcome_text)
+            await callback.message.edit_text(welcome_text, entities=welcome_entities)
         except TelegramBadRequest as e:
             if is_message_too_long_error(e):
-                logger.error("متن خوش‌آمدگویی (پیش‌نمایش %d کاراکتر) در check_join از سقف تلگرام بیشتر بود؛ کوتاه شد و دوباره فرستاده شد.", len(welcome_text))
-                await callback.message.edit_text(truncate_for_telegram(welcome_text))
+                logger.error("متن خوش‌آمدگویی check_join از سقف تلگرام بیشتر بود؛ نسخه‌ی کوتاه‌شده بدون Entity ارسال می‌شود.")
+                safe_text, safe_entities = truncate_text_and_entities(welcome_text, welcome_entities)
+                await callback.message.edit_text(safe_text, entities=safe_entities)
             else:
                 raise
         await show_menu_with_sticker(
