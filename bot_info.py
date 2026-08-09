@@ -25,6 +25,30 @@ logger = logging.getLogger(__name__)
 
 _PREFIX = "botinfo_"
 
+_WELCOME_ENTITIES_KEY = _PREFIX + "welcome_text_entities"
+
+
+def get_welcome_text_with_entities() -> tuple[str, list[dict]]:
+    """متن خوش‌آمدگویی را همراه Entityهای تلگرام، از جمله Custom Emoji، می‌خواند."""
+    text = get("welcome_text")
+    raw = db.get_setting(_WELCOME_ENTITIES_KEY)
+    if not raw:
+        return text, []
+    try:
+        entities = json.loads(raw)
+        return text, entities if isinstance(entities, list) else []
+    except Exception:
+        logger.exception("خطا در خواندن entityهای متن خوش‌آمدگویی")
+        return text, []
+
+
+def set_welcome_text_with_entities(value: str, entities: list[dict] | None = None) -> None:
+    """متن /start را همراه با Entityهای Telegram ذخیره می‌کند تا Custom Emoji حفظ شود."""
+    set("welcome_text", value)
+    clean = [dict(e) for e in (entities or []) if isinstance(e, dict)]
+    db.set_setting(_WELCOME_ENTITIES_KEY, json.dumps(clean, ensure_ascii=False))
+
+
 # کلید داخلی -> (مقدار پیش‌فرض از config.py، برچسب فارسی برای پنل ادمین)
 _FIELDS = {
     "welcome_text": ("👋 به ربات ما خوش آمدید!", "👋 متن خوش‌آمدگویی /start"),
