@@ -2,27 +2,27 @@
 utils.py
 توابع کمکی کوچک و مشترک بین handlerها.
 """
-​
+
 import os
 import time
 import asyncio
 import logging
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
-​
+
 from aiogram.types import FSInputFile
 from aiogram.exceptions import TelegramBadRequest
-​
+
 from keyboards import main_reply_keyboard
 import database as db
-​
+
 logger = logging.getLogger(__name__)
-​
+
 # حداکثر طول متن پیام معمولی تلگرام (send_message)؛ اگر متنی از این بیشتر باشد، تلگرام
 # خطای «Bad Request: MESSAGE_TOO_LONG» برمی‌گرداند.
 TELEGRAM_TEXT_LIMIT = 4096
-​
-​
+
+
 def truncate_for_telegram(text: str, limit: int = TELEGRAM_TEXT_LIMIT) -> str:
     """اگر متن از سقف مجاز طول پیام تلگرام بیشتر باشد، آن را کوتاه می‌کند و یک یادداشت کوتاه به انتهایش اضافه می‌کند؛ در غیر این‌صورت متن بدون تغییر برمی‌گردد. هر جایی که احتمال ارسال یک متن طولانی/قابل‌ویرایش (مثلاً پیام خوش‌آمدگویی یا هر متن دیگری که ادمین از پنل ویرایش کرده) وجود دارد، باید قبل از ارسال از این تابع استفاده کند (نه فقط در show_menu_with_sticker)."""
     if text is None:
@@ -31,13 +31,13 @@ def truncate_for_telegram(text: str, limit: int = TELEGRAM_TEXT_LIMIT) -> str:
         return text
     suffix = "\n\n… (متن به‌دلیل محدودیت طول پیام تلگرام کوتاه شد)"
     return text[: limit - len(suffix)] + suffix
-​
-​
+
+
 def is_message_too_long_error(exc: Exception) -> bool:
     """تشخیص می‌دهد که آیا یک TelegramBadRequest دقیقاً از نوع «MESSAGE_TOO_LONG» است (و مثلاً یک خطای مربوط به parse mode نیست)؛ تا همه‌جا یکسان تشخیص داده شود."""
     return "message is too long" in str(exc).lower()
-​
-​
+
+
 def get_main_keyboard(user_id):
     """منوی دائمی پایین صفحه را برمی‌گرداند — مگر اینکه برای این کاربر
     قبلاً بعد از تحویل یک سرویس (با set_keyboard_hidden(True)) مخفی شده باشد،
@@ -49,7 +49,7 @@ def get_main_keyboard(user_id):
     except Exception:
         logger.exception("خطا در بررسی وضعیت مخفی‌بودن منوی پایین صفحه")
     return main_reply_keyboard()
-​
+
 # سرور ربات (Render) با ساعت UTC کار می‌کند و همه‌ی رشده‌های زمانی ذخیره‌شده در
 # دیتابیس (created_at/expires_at و ...) بر همین اساس هستند؛ برای اینکه چیزی که
 # به کاربر نمایش داده می‌شود (نه چیزی که در فاکتورها/شمارش‌معکوس مقایسه می‌شود)
@@ -57,20 +57,20 @@ def get_main_keyboard(user_id):
 # 🐛 فیکس: قبلاً اینجا از pytz استفاده می‌شد که در requirements.txt نبود و در محیط دیپلوی (Render)
 # باعتت ModuleNotFoundError: No module named 'pytz' می‌شد؛ به جای آن از zoneinfo (کتابخانه‌ی استاندارد پایتون 3.9+) استفاده شد تا وابستگی جدیدی لازم نباشد.
 TEHRAN_TZ = ZoneInfo("Asia/Tehran")
-​
-​
+
+
 def now_tehran() -> datetime:
     """اکنون را بر اساس ساعت تهران برمی‌گرداند (فقط برای نمایش به کاربر/ادمین؛
     نه برای مقایسه با زمان‌های ذخیره‌شده در دیتابیس که بر مبنای ساعت UTC سرور هستند)."""
     return datetime.now(timezone.utc).astimezone(TEHRAN_TZ)
-​
-​
+
+
 def now_tehran_naive() -> datetime:
     """معادل now_tehran اما به‌صورت naive (بدون tzinfo)؛ برای مقایسه/تفریق با
     تاریخ‌های داخلیو‌شده‌ی بدون تایم‌زون (مثلاً تاریخ انقضای سرویس configs.expiry) لازم است."""
     return now_tehran().replace(tzinfo=None)
-​
-​
+
+
 def utc_str_to_tehran(dt_str: str, fmt_in: str = "%Y-%m-%d %H:%M:%S"):
     """یک رشته‌ی زمانی که با ساعت UTC سرور ذخیره شده (مثل expires_at فاکتورها) را
     به یک datetime بر اساس ساعت تهران تبدیل می‌کند. در صورت خطا None برمی‌گرداند."""
@@ -79,13 +79,13 @@ def utc_str_to_tehran(dt_str: str, fmt_in: str = "%Y-%m-%d %H:%M:%S"):
         return dt_utc.astimezone(TEHRAN_TZ)
     except Exception:
         return None
-​
-​
+
+
 _DIGIT_MAP = str.maketrans(
     "۰۱۲۳۴۵۶۷۸۹" "٠١٢٣٤٥٦٧٨٩",
     "0123456789" "0123456789",
 )
-​
+
 # 🐛 فیکس: کیبورد فارسی/عربی گوشی‌ها (به‌خصوص iOS) اغلب هنگام تایپ عدد،
 # نویسه‌های نامرئی جهت‌ساز/فرمت‌دهنده (RLM, LRM, ALM, ZWNJ, ZWSP, BOM) را
 # قبل/بعد/وسط رقم‌ها اضافه می‌کنند. این نویسه‌ها با چشم دیده نمی‌شوند ولی باعث
@@ -95,7 +95,7 @@ _DIGIT_MAP = str.maketrans(
 _INVISIBLE_CHARS_MAP = dict.fromkeys(
     ord(ch) for ch in "\u200b\u200c\u200d\u200e\u200f\u061c\ufeff\u202a\u202b\u202c\u202d\u202e"
 )
-​
+
 # ---------------------------------------------------------------------------
 # قفل سبک برای جلوگیری از اجرای دوباره‌ی یک عملیات مالی/سفارش در بازه‌ی کوتاه.
 #
@@ -111,8 +111,8 @@ _INVISIBLE_CHARS_MAP = dict.fromkeys(
 # ---------------------------------------------------------------------------
 _recent_actions: dict[str, float] = {}
 _ACTION_COOLDOWN_SECONDS = 15.0
-​
-​
+
+
 def is_duplicate_action(key: str, cooldown: float = _ACTION_COOLDOWN_SECONDS) -> bool:
     """اگر همین کلید در `cooldown` ثانیه‌ی اخیر پردازش شده باشد True برمی‌گرداند.
     باید همیشه به‌عنوان اولین خط سینک هندلر (قبل از هر await) صدا زده شود."""
@@ -124,15 +124,15 @@ def is_duplicate_action(key: str, cooldown: float = _ACTION_COOLDOWN_SECONDS) ->
         for k in [k for k, t in _recent_actions.items() if t < cutoff]:
             _recent_actions.pop(k, None)
     return last is not None and (now - last) < cooldown
-​
-​
+
+
 def normalize_digits(text: str) -> str:
     """ارقام فارسی/عربی را به انگلیسی تبدیل می‌کند تا int() و isdigit() درست کار کنند."""
     if not text:
         return text
     return text.translate(_DIGIT_MAP)
-​
-​
+
+
 def clean_numeric_id(text: str) -> str:
     """ورودی مثل آیدی عددی/مبلغ را پاک‌سازی می‌کند: ارقام فارسی/عربی را به انگلیسی
     تبدیل و نویسه‌های نامرئی جهت‌ساز/فرمت‌دهنده (RLM, LRM, ALM, ZWNJ, ZWSP, BOM و...) را حذف
@@ -143,8 +143,8 @@ def clean_numeric_id(text: str) -> str:
         return text
     cleaned = text.translate(_INVISIBLE_CHARS_MAP)
     return normalize_digits(cleaned).strip()
-​
-​
+
+
 def parse_int_in_range(text: str, min_value: int, max_value: int) -> int | None:
     """متن را به عدد صحیح تبدیل می‌کند و اگر در بازه‌ی مجاز نبود None برمی‌گرداند."""
     if not text:
@@ -156,15 +156,15 @@ def parse_int_in_range(text: str, min_value: int, max_value: int) -> int | None:
     if not (min_value <= value <= max_value):
         return None
     return value
-​
-​
+
+
 # ---------------------------------------------------------------------------
 # ⏰ مدیریت فاکتور/مهلت پرداخت و نمایش پیشرفت مرحله‌ای در پیام‌های ربات
-​
-​
+
+
 # ---------------------------------------------------------------------------
 # ⏰ مدیریت فاکتور/مهلت پرداخت و نمایش پیشرفت مرحله‌ای در پیام‌های ربات
-​
+
 def format_deadline_time(expires_at: str) -> str:
     """از رشته YYYY-MM-DD HH:MM:SS (که با ساعت UTC سرور ذخیره شده) ساعت:دقیقه را
     بر اساس ساعت تهران برمی‌گرداند (مثلاً برای پیام «فاکتور تا فلان ساعت معتبر است»)."""
@@ -175,16 +175,16 @@ def format_deadline_time(expires_at: str) -> str:
         return expires_at.split(" ")[1][:5]
     except Exception:
         return ""
-​
-​
+
+
 def progress_bar(step: int, total: int) -> str:
     """یک نوار پیشرفت ایموجی‌ای ساده برای نمایش مرحله X از Y در پیام‌های مسیر خرید."""
     step = max(1, min(step, total))
     filled = "🟩" * step + "⬜️" * (total - step)
     label = filled + " مرحله " + str(step) + " از " + str(total)
     return label + chr(10) + chr(10)
-​
-​
+
+
 # ---------------------------------------------------------------------------
 # 🧪 تست: نمایش یک استیکر (ویدیویی) درست بالای یک منو، به‌ازای هر مرحله از
 # مسیر خرید. هر بار که این تابع دوباره برای همان چت صدا زده شود، آخرین جفت
@@ -198,7 +198,7 @@ def progress_bar(step: int, total: int) -> str:
 # اطلاعات را داخل state ذخیره می‌کردیم، با هر state.clear() گم می‌شد و دیگر
 # نمی‌توانستیم پیام قبلی را برای حذف پیدا کنیم.
 _last_sticker_menu: dict[int, dict[str, int | None]] = {}
-​
+
 # ---------------------------------------------------------------------------
 # ⚡ کش‌های حافظه‌ای برای رفع کندی: قبلاً هر بار جابه‌جایی بین منوها باعث
 # می‌شد (۱) فایل استیکر پیش‌فرض دوباره از روی دیسک به تلگرام آپلود شود و
@@ -210,15 +210,15 @@ _last_sticker_menu: dict[int, dict[str, int | None]] = {}
 _default_sticker_file_id_cache: dict[str, str] = {}
 _section_sticker_override_cache: dict[str, dict | None] = {}
 _section_sticker_override_cache_loaded: set[str] = set()
-​
-​
+
+
 def invalidate_section_sticker_cache(section_key: str) -> None:
     """باید بعد از هر تغییر ادمین روی استیکر یک بخش (آپلود/غیرفعال/فعال/ریست)
     صدا زده شود تا کش حافظه‌ای به‌روز شود و تغییر بلافاصله برای کاربران اعمال شود."""
     _section_sticker_override_cache.pop(section_key, None)
     _section_sticker_override_cache_loaded.discard(section_key)
-​
-​
+
+
 # نگاشت یک کلید کوتاه و معنادار (که در کد handlerها استفاده می‌شود) به نام
 # فایل واقعی استیکر روی دیسک (پوشه‌ی stickers/ کنار همین پروژه).
 STICKERS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stickers")
@@ -227,7 +227,7 @@ STICKER_FILES = {
     "buy_plans": "service.webm",    # دکمه‌ی «🛒 خرید اشتراک»
     "plan_select": "plan.webm",     # دکمه‌ی «🚀 سرور VIP»
 }
-​
+
 # عنوان فارسی قابل‌نمایش هر بخش، برای استفاده در پنل مدیریت استیکرها (handlers/admin.py).
 STICKER_SECTION_LABELS = {
     "start_welcome": "👋 شروع با /start",
@@ -276,8 +276,8 @@ STICKER_SECTION_LABELS = {
     "notif_purchase_approved": "✅ تایید پرداخت کارت‌به‌کارت",
     "notif_receipt_rejected": "❌ رد رسید (خرید/شارژ)",
 }
-​
-​
+
+
 async def _delete_messages_in_background(bot, chat_id: int, message_ids: list[int]) -> None:
     """پیام‌های قدیمی (استیکر/منوی مرحله‌ی قبل) را در پس‌زمینه حذف می‌کند
     تا کاربر منتظر تمام‌شدن حذف نماند و منوی جدید هرچه سریع‌تر ظاهر شود
@@ -288,8 +288,8 @@ async def _delete_messages_in_background(bot, chat_id: int, message_ids: list[in
             await bot.delete_message(chat_id, msg_id)
         except Exception:
             pass
-​
-​
+
+
 def _get_section_sticker_override(sticker_key: str) -> dict | None:
     """نسخه‌ی کش‌شده‌ی db.get_section_sticker؛ قبلاً این کوئری روی هر جابه‌جایی
     منو (حتی وقتی ادمین چیزی سفارشی نکرده بود) اجرا می‌شد و به‌خصوص وقتی دیتابیس
@@ -305,8 +305,8 @@ def _get_section_sticker_override(sticker_key: str) -> dict | None:
     _section_sticker_override_cache[sticker_key] = override
     _section_sticker_override_cache_loaded.add(sticker_key)
     return override
-​
-​
+
+
 async def show_menu_with_sticker(
     bot,
     chat_id: int,
@@ -318,20 +318,20 @@ async def show_menu_with_sticker(
 ):
     """یک پیام منوی تازه می‌فرستد (همیشه پیام جدید، نه ویرایش پیام قبلی) و اگر
     sticker_key داده شده باشد، درست بالای همان منو یک استیکر می‌فرستد.
-​
+
     🚀 پرفورمنس: اگر استیکر پیش‌فرض (غیرسفارشی) باشد، فقط دفعه‌ی اول از روی دیسک
     آپلود می‌شود و file_id برگشتی‌شده تلگرام در حافظه کش می‌شود؛ دفعات بعدی فقط
     همان file_id را می‌فرستد (بدون خواندن دوباره‌ی فایل از دیسک)؛ همین بزرگ‌ترین عامل کندی قبلی بود.
-​
+
     ✅ منوی دائمی پایین صفحه (main_reply_keyboard) همراه با هر استیکری که اینجا فرستاده
     می‌شود دوباره تازه می‌شود؛ قبلاً فقط در /start فرستاده می‌شد و با حذف همان پیام در
     جابه‌جایی بعدی از دید کاربر گم می‌شد و کاربر مجبور می‌شد دوباره /start بزند.
-​
+
     ⚠️ show_main_keyboard=False: فقط برای صفحه‌ی «عضویت اجباری در کانال‌ها» (پیش از
     تأیید عضویت) استفاده شود؛ چون هیچ‌کدام از handlerهای منوی پایین صفحه، عضویت
     کاربر را دوباره چک نمی‌کنند، اگر آنجا هم منوی پایین صفحه فعال شود کاربرِ
     هنوز-عضونشده می‌تواند بدون عضویت واقعی از دکمه‌های پایین صفحه استفاده کند.
-​
+
     پیام‌های قبلی (استیکر/منوی مرحله‌ی قبل) در پس‌زمینه حذف می‌شوند تا کاربر منتظر
     تمام‌شدن حذف نماند و منوی جدید در سریع‌ترین حالت ممکن ظاهر شود. اگر sticker_key
     مقدار None باشد، فقط پیام منو (بدون استیکر جدید) فرستاده می‌شود؛ برای مرحله‌هایی
@@ -339,14 +339,14 @@ async def show_menu_with_sticker(
     """
     # منوی قبلی حذف نمی‌شود.
     prev = _last_sticker_menu.get(chat_id)
-​
+
     new_sticker_msg_id = None
     if sticker_key:
         # ابتدا بررسی می‌شود که آیا ادمین از پنل ادمین برای این بخش چیزی سفارشی کرده
         # (استیکر خاص یا غیرفعال‌سازی کامل)؛ اگر چیزی سفارشی نشده باشد، از استیکر
         # پیش‌فرض داخل پروژه استفاده می‌شود (از کش در صورت موجود).
         override = _get_section_sticker_override(sticker_key)
-​
+
         sticker_source = None  # ("file_id", value) یا ("path", value)
         if override is not None:
             if override.get("is_enabled") and override.get("file_id"):
@@ -367,7 +367,7 @@ async def show_menu_with_sticker(
                         has_content = False
                     if has_content:
                         sticker_source = ("path", candidate_path)
-​
+
         if sticker_source:
             sticker_reply_markup = get_main_keyboard(chat_id) if show_main_keyboard else None
             try:
@@ -387,7 +387,7 @@ async def show_menu_with_sticker(
                 new_sticker_msg_id = sticker_msg.message_id
             except Exception:
                 logger.exception("خطا در ارسال استیکر تست '%s'", sticker_key)
-​
+
     if new_sticker_msg_id is None and show_main_keyboard:
         # 🆕 فیکس: تا امروز وقتی استیکری فرستاده نمی‌شد (چون ادمین برای این بخش
         # استیکری آپلود نکرده بود، یا این مرحله عمداً بدون استیکر است — مثلاً
@@ -408,7 +408,7 @@ async def show_menu_with_sticker(
             new_sticker_msg_id = invisible_msg.message_id
         except Exception:
             logger.exception("خطا در ارسال پیام نامرئی تازه‌سازی منوی پایین صفحه")
-​
+
     try:
         menu_msg = await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode=parse_mode)
     except TelegramBadRequest as e:
@@ -441,21 +441,21 @@ async def show_menu_with_sticker(
         menu_msg = await _send_last_resort_menu_message(bot, chat_id, text)
     _last_sticker_menu[chat_id] = {"sticker_msg_id": new_sticker_msg_id, "menu_msg_id": menu_msg.message_id}
     return menu_msg
-​
-​
+
+
 async def _send_last_resort_menu_message(bot, chat_id: int, text: str):
     """آخرین لایه‌ی محافظتی داخل show_menu_with_sticker: وقتی حتی نسخه‌ی کوتاه‌شده/بدون‌فرمت هم ارسال نشد (مثلاً چون خودِ کیبورد همراهش نامعتبر بود، نه متن)، بدون هیچ کیبورد سفارشی و فرمتی، و با متنی کاملاً کوتاه، یک پیام حداقلی می‌فرستد تا کاربر هرگز با سکوت کامل مواجه نشود."""
     minimal_text = truncate_for_telegram(text, 1000) if text else "🏠 خوش آمدید!"
     return await bot.send_message(chat_id=chat_id, text=minimal_text)
-​
-​
+
+
 async def send_notification_sticker(bot, chat_id: int, sticker_key: str) -> None:
     """برای پیام‌های اطلاع‌رسانیِ تکی (نه مسیر منو) - مثل پیام شخصی ادمین،
     پیام همگانی، هشدار انقضا/مصرف سرویس، شارژ کیف پول توسط ادمین یا ارسال
     سرویس توسط ادمین - اگر ادمین از پنل ادمین (بخش «مدیریت استیکرها») برای
     همین sticker_key چیزی آپلود و فعال کرده باشد، همان استیکر را درست قبل از
     پیام اصلی می‌فرستد.
-​
+
     برخلاف show_menu_with_sticker:
     - این کلیدها هیچ استیکر پیش‌فرض پروژه‌ای ندارند (در STICKER_FILES نیستند)؛
       یعنی تا وقتی ادمین چیزی آپلود نکند، هیچ استیکری فرستاده نمی‌شود و هیچ
@@ -472,8 +472,8 @@ async def send_notification_sticker(bot, chat_id: int, sticker_key: str) -> None
         await bot.send_sticker(chat_id, sticker=override["file_id"])
     except Exception:
         logger.exception("خطا در ارسال استیکر اطلاع‌رسانی '%s'", sticker_key)
-​
-​
+
+
 async def send_admin_task_message(bot, main_admin_id: int, permission: str, text: str, reply_markup=None, parse_mode=None):
     """ارسال کار عملیاتی ادمین: اگر ادمین فرعی مسئول آن مجوز وجود دارد،
     پیام عملیاتی فقط برای او/آن‌ها ارسال می‌شود؛ وگرنه برای ادمین اصلی.
@@ -493,7 +493,7 @@ async def send_admin_task_message(bot, main_admin_id: int, permission: str, text
         except Exception:
             pass
     return sent
-​
+
 async def forward_admin_task_message(bot, main_admin_id: int, permission: str, from_chat_id: int, message_id: int):
     try:
         import database as db
@@ -510,4 +510,3 @@ async def forward_admin_task_message(bot, main_admin_id: int, permission: str, f
         except Exception:
             pass
     return sent
-​
